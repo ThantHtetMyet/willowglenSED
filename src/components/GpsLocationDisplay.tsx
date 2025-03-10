@@ -13,8 +13,8 @@ import { NativeModules } from 'react-native';
 
 const GpsLocationDisplay = () => {
   const [coordinates, setCoordinates] = useState({
-    longitude: 1.359485,
-    latitude: 104.394
+    latitude: 0.000,    // Fixed: Swapped latitude and longitude values
+    longitude: 0.000   // Singapore's approximate coordinates
   });
   const appState = useRef(AppState.currentState);
   const flashAnimation = useRef(null);
