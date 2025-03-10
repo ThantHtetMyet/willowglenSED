@@ -7,14 +7,16 @@ import {
   Dimensions,
   AppState,
   AppStateStatus,
+  PermissionsAndroid,
+  Platform,
 } from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
 import { NativeModules } from 'react-native';
 
 const GpsLocationDisplay = () => {
   const [coordinates, setCoordinates] = useState({
-    latitude: 0.000,    // Fixed: Swapped latitude and longitude values
-    longitude: 0.000   // Singapore's approximate coordinates
+    longitude: 103.394,
+    latitude: 1.359485
   });
   const appState = useRef(AppState.currentState);
   const flashAnimation = useRef(null);
@@ -37,6 +39,99 @@ const GpsLocationDisplay = () => {
   });
 
   useEffect(() => {
+    const requestLocationPermission = async () => {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          {
+            title: "Location Permission",
+            message: "SED needs access to your location",
+            buttonNeutral: "Ask Me Later",
+            buttonNegative: "Cancel",
+            buttonPositive: "OK"
+          }
+        );
+        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+          updateCoordinates(); // Initial update
+        }
+      } catch (err) {
+        console.log('Location permission error:', err);
+      }
+    };
+
+    const updateCoordinates = () => {
+      // Get GPS position first
+      Geolocation.getCurrentPosition(
+        (position) => {
+          // After getting position, start animation and update coordinates
+          Animated.sequence([
+            Animated.parallel([
+              Animated.timing(phoneBorderAnim, {
+                toValue: 1,
+                duration: 300,
+                useNativeDriver: false,
+              }),
+              Animated.timing(borderColorAnim, {
+                toValue: 1,
+                duration: 300,
+                useNativeDriver: false,
+              })
+            ]),
+            Animated.parallel([
+              Animated.timing(phoneBorderAnim, {
+                toValue: 0,
+                duration: 300,
+                useNativeDriver: false,
+              }),
+              Animated.timing(borderColorAnim, {
+                toValue: 0,
+                duration: 300,
+                useNativeDriver: false,
+              })
+            ])
+          ]).start(() => {
+            // Update coordinates after animation completes
+            setCoordinates({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+            });
+          });
+        },
+        (error) => {
+          console.log(error.code, error.message);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+      );
+    };
+
+    // Remove startLocationUpdates function and keep only the interval
+    requestLocationPermission();
+    const interval = setInterval(updateCoordinates, 5000);
+
+    const startLocationUpdates = () => {
+      const watchId = Geolocation.watchPosition(
+        (position) => {
+          setCoordinates({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        (error) => {
+          console.log('Location error:', error);
+        },
+        { 
+          enableHighAccuracy: true,
+          distanceFilter: 0,
+          interval: 1000,
+          fastestInterval: 1000
+        }
+      );
+      return watchId;
+    };
+
+    // Request permission and start location updates
+    requestLocationPermission();
+
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
       if (appState.current === 'active' && nextAppState === 'background') {
         // Show system overlay when app goes to background
@@ -76,50 +171,7 @@ const GpsLocationDisplay = () => {
       }).start();
     });
 
-    const updateCoordinates = () => {
-      // Flash both borders simultaneously
-      Animated.sequence([
-        Animated.parallel([
-          Animated.timing(phoneBorderAnim, {
-            toValue: 1,
-            duration: 300,
-            useNativeDriver: false,
-          }),
-          Animated.timing(borderColorAnim, {
-            toValue: 1,
-            duration: 300,
-            useNativeDriver: false,
-          })
-        ]),
-        Animated.parallel([
-          Animated.timing(phoneBorderAnim, {
-            toValue: 0,
-            duration: 300,
-            useNativeDriver: false,
-          }),
-          Animated.timing(borderColorAnim, {
-            toValue: 0,
-            duration: 300,
-            useNativeDriver: false,
-          })
-        ])
-      ]).start();
-
-      Geolocation.getCurrentPosition(
-        (position) => {
-          setCoordinates({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          });
-        },
-        (error) => {
-          console.log(error.code, error.message);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-      );
-    };
-
-    const interval = setInterval(updateCoordinates, 5000);
+    //const interval = setInterval(updateCoordinates, 5000);
 
     return () => {
       subscription.remove();
