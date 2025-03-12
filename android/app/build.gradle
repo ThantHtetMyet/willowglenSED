@@ -108,6 +108,7 @@ android {
     }
 }
 
+// Add in the dependencies block
 dependencies {
     implementation("com.facebook.react:react-android")
     implementation project(':react-native-geolocation-service')
@@ -116,5 +117,22 @@ dependencies {
         implementation("com.facebook.react:hermes-android")
     } else {
         implementation jscFlavor
+    }
+    
+    // Add these configurations to resolve conflicts
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:1.8.0"))
+    implementation 'androidx.core:core:1.13.1'
+    
+    // Exclude conflicting support library
+    implementation('com.google.android.gms:play-services-base') {
+        exclude group: 'com.android.support', module: 'support-compat'
+    }
+    
+    // Force androidx version
+    configurations.all {
+        resolutionStrategy {
+            force 'androidx.core:core:1.13.1'
+            force 'androidx.core:core-ktx:1.13.1'
+        }
     }
 }
