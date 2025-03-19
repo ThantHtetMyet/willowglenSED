@@ -1,84 +1,190 @@
-import React, { useEffect, useRef, useState } from 'react';
-import {
-  StyleSheet,
-  Text,
-  View,
-  Animated,
-  Modal,
-  Dimensions,
-  AppState,
-  AppStateStatus,
-  PermissionsAndroid,
-  Platform,
-  ToastAndroid,
-} from 'react-native';
-import Geolocation from 'react-native-geolocation-service';
-import { NativeModules } from 'react-native';
-import restrictedAreas from '../data/restrictedAreas.json';
-import { initializeNotifications } from '../utils/notificationService';
-import { showBackgroundNotification } from '../utils/notificationService';
-import { showNotification } from '../utils/notificationService';
+import React, { useEffect, useState, useRef } from 'react';
+import { SafeAreaView, StyleSheet,Alert, Text, Animated, Dimensions, View, AppState, AppStateStatus, ToastAndroid, PermissionsAndroid } from 'react-native';
+import MapView, { Marker, Polygon } from 'react-native-maps';
+import Geolocation from '@react-native-community/geolocation';
+import restrictedAreas from '../data/restrictedAreas.json'; // Assuming the JSON file is placed in the 'data' folder.
+import { showNotification,initializeNotifications,showBackgroundNotification } from '../utils/notificationService';
+import BackgroundFetch from 'react-native-background-fetch';
 
 const GpsLocationDisplay = () => {
-  // Add new states
-  const [modalVisible, setModalVisible] = useState(false);
-  const [alertMessage, setAlertMessage] = useState('');
-  
-  // States
   const [coordinates, setCoordinates] = useState({
-    longitude: 103.394,
-    latitude: 1.359485
+    latitude: 1.359485,
+    longitude: 104.394,
   });
-  const [hasPlayedInitialAnimation, setHasPlayedInitialAnimation] = useState(false);
-
-  // Refs
+  const [region, setRegion] = useState({
+    latitude: 1.359485,
+    longitude: 104.394,
+    latitudeDelta: 0.005,
+    longitudeDelta: 0.005,
+  });
+  const [mapReady, setMapReady] = useState(false);
+  const [alertMessage, setAlertMessage] = useState('');
+  const [isInsideRestrictedArea, setIsInsideRestrictedArea] = useState(false); // Track if inside restricted area
+  const [notificationSent, setNotificationSent] = useState(false); // Track if notification has been sent
+  
   const appState = useRef(AppState.currentState);
-  const flashAnimation = useRef(null);
   const titleAnim = useRef(new Animated.Value(0)).current;
   const moveAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(1.2)).current;
-  const contentOpacity = useRef(new Animated.Value(0)).current;
-  const borderColorAnim = useRef(new Animated.Value(0)).current;
-  const phoneBorderAnim = useRef(new Animated.Value(0)).current;
+  const borderColorAnim = useRef(new Animated.Value(0)).current; // Animation value for border color flashing
 
-  // Interpolations
-  const interpolatedBorderColor = borderColorAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['#000000', '#FF6600']
-  });
+  const titleContainerHeight = 80; // Height of the title container (adjust as needed)
 
-  const interpolatedPhoneBorder = phoneBorderAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['transparent', '#FF6600']
-  });
+  const backgroundIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    initializeNotifications();
+     // Background fetch setup (recommend extracting into separate file)
+     BackgroundFetch.configure(
+      {
+        minimumFetchInterval: 1, // fetch interval in minutes
+      },
+      async taskId => {
+        ToastAndroid.show('Received background GPS Location Synchronized', ToastAndroid.SHORT);
+        showNotification('🚸 SCHOOL ZONE ALERT!', "HELLO");
+        console.log('Received background-fetch event: ', taskId);
+          showBackgroundNotification();
+        // Call finish upon completion of the background task
+        BackgroundFetch.finish(taskId);
+      },
+      error => {
+         ToastAndroid.show('RNBackgroundFetch failed to start', ToastAndroid.SHORT);
+         showNotification('🚸 ERROR ZONE ALERT!', "HELLO");
+        console.error('RNBackgroundFetch failed to start.');
+      },
+    );
 
-  const yPosition = moveAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -(Dimensions.get('window').height / 2 - 50)]
-  });
+    // Handle app state changes (background to foreground)
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      const previousState = appState.current;
+      appState.current = nextAppState;
 
-  // Location permission request
-  const requestLocationPermission = async () => {
-    try {
-      const granted = await PermissionsAndroid.request(
+      // Check if app is going to background
+      if (previousState === 'active' && nextAppState === 'background') {
+      
+      }
+    });
+
+    // Request Location Permission
+    const requestPermission = async () => {
+      // Initialize notifications with permission check
+      initializeNotifications().catch(console.error);
+    
+      // Request location permission
+      const locationGranted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         {
-          title: "Location Permission",
-          message: "SED needs access to your location",
+          title: 'Location Permission',
+          message: 'We need access to your location to display it on the map',
+          buttonNeutral: 'Ask Me Later',
+          buttonNegative: 'Cancel',
+          buttonPositive: 'OK',
+        }
+      );
+
+      // Request notification permission
+      const notificationGranted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+        {
+          title: "Notification Permission",
+          message: "We need permission to send you alerts when in school zones",
           buttonNeutral: "Ask Me Later",
           buttonNegative: "Cancel",
           buttonPositive: "OK"
         }
       );
-      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-        updateCoordinates();
-      }
-    } catch (err) {
-      console.log('Location permission error:', err);
-    }
-  };
 
-  // Update coordinates with animation
+      if (locationGranted === PermissionsAndroid.RESULTS.GRANTED) {
+        updateCoordinates();
+      } else {
+        Alert.alert('Location Permission Denied');
+      }
+
+      if (notificationGranted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert('Notification Permission Denied - You may not receive alerts when the app is in background');
+      }
+    };
+    
+    // Start animation sequence
+    Animated.sequence([
+      Animated.timing(titleAnim, {
+        toValue: 1,
+        duration: 1000,
+        useNativeDriver: true,
+      }),
+      Animated.delay(500),
+      Animated.parallel([
+        Animated.timing(moveAnim, {
+          toValue: 1,
+          duration: 1500,
+          useNativeDriver: true,
+        }),
+        Animated.timing(scaleAnim, {
+          toValue: 1,
+          duration: 1500,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start(() => {
+      setMapReady(true); // Show the map once the animation finishes
+    });
+
+    requestPermission();
+
+    // Fetch current position
+    const updateCoordinates = () => {
+      Geolocation.getCurrentPosition(
+        (position) => {
+          setCoordinates({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+          setRegion({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            latitudeDelta: 0.005,
+            longitudeDelta: 0.005,
+          });
+          // Show toast when coordinates are updated
+          ToastAndroid.show('GPS Location Synchronized', ToastAndroid.SHORT);
+
+          // Check if in restricted area only after map is ready
+          if (mapReady) {
+            const isRestricted = restrictedAreas.features.some((feature) => {
+              if (feature.geometry.type === "Polygon") {
+                const coordinates = feature.geometry.coordinates[0];
+                if (isPointInPolygon([position.coords.longitude, position.coords.latitude], coordinates)) {
+                  setIsInsideRestrictedArea(true); // Trigger flashing border
+                  showAlert(`${feature.properties.Name}\n\nPlease drive carefully - Speed limit 40km/h`);
+                  return true;
+                }
+              }
+              return false;
+            });
+
+            if (!isRestricted) {
+              setIsInsideRestrictedArea(false); // Stop flashing if not inside restricted area
+            }
+          }
+        },
+        (error) => {
+          console.log(error.code, error.message);
+          ToastAndroid.show('Failed to update GPS location', ToastAndroid.SHORT);
+        },
+        { enableHighAccuracy: true, distanceFilter: 10 }
+      );
+    };
+
+    // Set interval for periodic updates
+    const intervalId = setInterval(updateCoordinates, 10000);
+    return () => {
+      if (backgroundIntervalRef.current) {
+        clearInterval(backgroundIntervalRef.current);
+      }
+      subscription.remove();
+    };
+  }, [titleAnim, moveAnim, scaleAnim, mapReady]);
+
+  // Check if a point is inside a polygon (used for restricted areas)
   const isPointInPolygon = (point: [number, number], polygon: number[][]) => {
     const [x, y] = point;
     let inside = false;
@@ -95,327 +201,298 @@ const GpsLocationDisplay = () => {
     return inside;
   };
 
+  // Show alert message
+  const showAlert = (message: string) => {
+    setAlertMessage(message);
+    //showNotification('🚸 SCHOOL ZONE ALERT!', message);
+   
+    //ToastAndroid.show(message, ToastAndroid.LONG); // Show toast with the alert message
+  };
 
-// Update showAlert function
-const showAlert = (message: string) => {
-  setAlertMessage(message);
-  setModalVisible(true);
-  
-  showNotification('🚸 SCHOOL ZONE ALERT!', message);
-
-  setTimeout(() => {
-    setModalVisible(false);
-  }, 3000);
-};
-
-  // Modify updateCoordinates function
-  const updateCoordinates = () => {
-      Geolocation.getCurrentPosition(
-        (position) => {
-          const newCoords = {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-          };
-  
-          // Check if in restricted area
-          const isRestricted = restrictedAreas.features.some((feature: RestrictedArea) => {
-            if (feature.geometry.type === "Polygon") {
-              const coordinates = feature.geometry.coordinates[0];
-              if (isPointInPolygon([newCoords.longitude, newCoords.latitude], coordinates)) {
-                if (isPointInPolygon([newCoords.longitude, newCoords.latitude], coordinates)) {
-                  showAlert(`${feature.properties.Name}\n\nPlease drive carefully - Speed limit 40km/h`);
-                  return true;
-                }
-              }
-            }
-            return false;
-          });
-  
-          // Existing animation sequence
-          Animated.sequence([
-            Animated.parallel([
-              Animated.timing(phoneBorderAnim, {
-                toValue: 1,
-                duration: 300,
-                useNativeDriver: false,
-              }),
-              Animated.timing(borderColorAnim, {
-                toValue: 1,
-                duration: 300,
-                useNativeDriver: false,
-              })
-            ]),
-            Animated.parallel([
-              Animated.timing(phoneBorderAnim, {
-                toValue: 0,
-                duration: 300,
-                useNativeDriver: false,
-              }),
-              Animated.timing(borderColorAnim, {
-                toValue: 0,
-                duration: 300,
-                useNativeDriver: false,
-              })
-            ])
-          ]).start(() => {
-            setCoordinates(newCoords);
-            
-            if (!isRestricted) {
-              ToastAndroid.showWithGravity(
-                'Synchronized GPS Data',
-                ToastAndroid.SHORT,
-                ToastAndroid.BOTTOM
-              );
-            }
-          });
-        },
-        (error) => {
-          console.log(error.code, error.message);
-          ToastAndroid.showWithGravity(
-            'GPS Sync Failed',
-            ToastAndroid.SHORT,
-            ToastAndroid.BOTTOM
-          );
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-      );
-    };
-
-  // Update the background state handler in useEffect
-  useEffect(() => {
-    // Initialize notifications with permission check
-    initializeNotifications().catch(console.error);
-    
-    // Initial animation
-    if (!hasPlayedInitialAnimation) {
+  // Flashes the yellow border when inside the restricted area
+  const flashBorder = () => {
+    return Animated.loop(
       Animated.sequence([
-        Animated.timing(titleAnim, {
+        Animated.timing(borderColorAnim, {
           toValue: 1,
-          duration: 1000,
-          useNativeDriver: true,
+          duration: 500,
+          useNativeDriver: false,
         }),
-        Animated.delay(500),
-        Animated.parallel([
-          Animated.timing(moveAnim, {
-            toValue: 1,
-            duration: 1500,
-            useNativeDriver: true,
-          }),
-          Animated.timing(scaleAnim, {
-            toValue: 1,
-            duration: 1500,
-            useNativeDriver: true,
-          })
-        ])
-      ]).start(() => {
-        Animated.timing(contentOpacity, {
-          toValue: 1,
-          duration: 800,
-          useNativeDriver: true,
-        }).start(() => {
-          setHasPlayedInitialAnimation(true);
-        });
-      });
+        Animated.timing(borderColorAnim, {
+          toValue: 0,
+          duration: 500,
+          useNativeDriver: false,
+        }),
+      ])
+    );
+  };
+
+  useEffect(() => {
+    if (isInsideRestrictedArea) {
+      flashBorder().start(); // Start flashing when inside a restricted area
     } else {
-      titleAnim.setValue(1);
-      moveAnim.setValue(1);
-      scaleAnim.setValue(1);
-      contentOpacity.setValue(1);
+      borderColorAnim.setValue(0); // Reset border color if not in restricted area
     }
+  }, [isInsideRestrictedArea]);
 
-    // App state subscription
-    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      // In the AppState change handler within useEffect
-      if (appState.current === 'active' && nextAppState === 'background') {
-        try {
-          if (NativeModules.BorderOverlay) {
-            NativeModules.BorderOverlay.showBorderOverlay();
-            const backgroundInterval = setInterval(() => {
-              updateCoordinates();
-              // Refresh background notification periodically
-              showBackgroundNotification();
-              
-              ToastAndroid.showWithGravity(
-                'TEST Warning 1',
-                ToastAndroid.SHORT,
-                ToastAndroid.BOTTOM
-              );
+  const interpolatedBorderColor = borderColorAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['transparent', '#FFFF00'], // Flash between transparent and yellow
+  });
 
-            }, 5000);
-            
-            showBackgroundNotification(); // Initial background notification
-            
-            flashAnimation.current = backgroundInterval;
-            ToastAndroid.showWithGravity(
-              'GPS tracking in background',
-              ToastAndroid.SHORT,
-              ToastAndroid.BOTTOM
-            );
-          }
-        } catch (error) {
-          console.log('Error showing border overlay:', error);
-        }
-      }
-      else if (appState.current === 'background' && nextAppState === 'active') {
-        try {
-          NativeModules.BorderOverlay?.hideBorderOverlay();
-          ToastAndroid.showWithGravity(
-            'TEST Warning 2',
-            ToastAndroid.SHORT,
-            ToastAndroid.BOTTOM
-          );
-          if (flashAnimation.current) {
-            clearInterval(flashAnimation.current);
-            flashAnimation.current = null;
-          }
-          ToastAndroid.showWithGravity(
-            'GPS tracking resumed',
-            ToastAndroid.SHORT,
-            ToastAndroid.BOTTOM
-          );
-        } catch (error) {
-          console.log('Error hiding border overlay:', error);
-        }
-      }
-      appState.current = nextAppState;
-    });
-
-    // Location updates
-    requestLocationPermission();
-    const interval = setInterval(updateCoordinates, 5000);
-
-    // Cleanup
-    return () => {
-      subscription.remove();
-      clearInterval(interval);
-      if (flashAnimation.current) {
-        clearInterval(flashAnimation.current);
-        flashAnimation.current = null;
-      }
-    };
-  }, [hasPlayedInitialAnimation]);
+  const yPosition = moveAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -(Dimensions.get('window').height / 2 - 50)],
+  });
 
   return (
-    <View style={styles.container}>
-      <Animated.View style={[styles.phoneBorder, {
-        borderColor: interpolatedPhoneBorder
-      }]}>
-        <Animated.View style={[
-          styles.titleWrapper,
-          {
-            opacity: titleAnim,
-            transform: [
-              { translateY: yPosition },
-              { scale: scaleAnim }
-            ]
-          }
-        ]}>
-          <Text style={styles.title}>Willowglen SED</Text>
-        </Animated.View>
-
-        <Animated.View style={[styles.contentContainer, { opacity: contentOpacity }]}>
-          <Animated.View style={[
-            styles.coordinatesContainer,
-            { borderColor: interpolatedBorderColor }
-          ]}>
-            <View style={styles.coordinateRow}>
-              <Text style={styles.label}>Longitude:</Text>
-              <Text style={styles.value}>{coordinates.longitude}</Text>
-            </View>
-            <View style={styles.coordinateRow}>
-              <Text style={styles.label}>Latitude:</Text>
-              <Text style={styles.value}>{coordinates.latitude}</Text>
-            </View>
+    <SafeAreaView style={{ flex: 1 }}>
+      <View style={styles.container}>
+        <View style={styles.headerContainer}>
+          <Animated.View
+            style={[
+              styles.titleWrapper,
+              {
+                opacity: titleAnim,
+                transform: [
+                  { translateY: yPosition },
+                  { scale: scaleAnim },
+                ],
+              },
+            ]}
+          >
+            <Text style={styles.title}>Willowglen SED</Text>
           </Animated.View>
-        </Animated.View>
-      </Animated.View>
-      <Modal
-        transparent={true}
-        visible={modalVisible}
-        animationType="fade"
-      >
-          <View style={styles.modalContainer}>
-          <View style={styles.alertBox}>
-            <Text style={styles.alertText}>{alertMessage}</Text>
-          </View>
         </View>
-      </Modal>
-    </View>
+
+        {mapReady && (
+          <View style={styles.mapContainer}>
+            <MapView
+              style={styles.mapStyle}
+              region={region}
+              showsUserLocation={true}
+              showsMyLocationButton={true}
+              customMapStyle={mapStyle} // Apply custom map style
+            >
+              <Marker
+                coordinate={coordinates}
+                title={'Current Location'}
+                description={'You are here'}
+              />
+              {restrictedAreas.features.map((feature, index) => {
+                if (feature.geometry.type === 'Polygon') {
+                  return (
+                    <Polygon
+                      key={index}
+                      coordinates={feature.geometry.coordinates[0].map(coord => ({
+                        latitude: coord[1],
+                        longitude: coord[0],
+                      }))}
+                      strokeColor="#FFFF00"
+                      fillColor="rgba(255, 0, 0, 0.3)"
+                      strokeWidth={2}
+                    />
+                  );
+                }
+                return null;
+              })}
+            </MapView>
+          </View>
+        )}
+      </View>
+
+      {/* Flashing Border */}
+      <View style={styles.phoneBorders}>
+        <Animated.View
+          style={[
+            styles.borderTop,
+            {
+              top: titleContainerHeight, // Ensure the top border starts below the title
+              borderColor: interpolatedBorderColor, // Use animated border color
+              zIndex: 10, // Ensure the top border is on top
+            },
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.borderRight,
+            {
+              borderColor: interpolatedBorderColor,
+            },
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.borderBottom,
+            {
+              borderColor: interpolatedBorderColor,
+            },
+          ]}
+        />
+        <Animated.View
+          style={[
+            styles.borderLeft,
+            {
+              borderColor: interpolatedBorderColor,
+            },
+          ]}
+        />
+      </View>
+    </SafeAreaView>
   );
 };
 
-// Add these styles to the StyleSheet
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#242f3e',
   },
-  phoneBorder: {
-    flex: 1,
-    borderWidth: 8,
-    margin: 5,
-    borderRadius: 20,
+  headerContainer: {
+    height: 80,
+    width: '100%',
+    backgroundColor: '#242f3e',
+    zIndex: 2,
   },
   titleWrapper: {
-    position: 'absolute',
     width: '100%',
-    paddingVertical: 20,
+    paddingVertical: 10,
     alignItems: 'center',
-    top: Dimensions.get('window').height / 2 - 30,
+    top: Dimensions.get('window').height / 2 - 45,
+  },
+  mapContainer: {
+    flex: 1,
+    backgroundColor: '#242f3e',
+    marginTop: -5,
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
     color: '#FF6600',
   },
-  contentContainer: {
-    flex: 1,
-    paddingTop: 80,
-  },
-  coordinatesContainer: {
-    padding: 20,
-    borderWidth: 2,
-    borderRadius: 10,
-    margin: 20,
-    marginTop: 80,
-    borderColor: '#000000',
-  },
-  coordinateRow: {
-    flexDirection: 'row',
-    marginVertical: 5,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginRight: 10,
-  },
-  value: {
-    fontSize: 16,
-  },
-  
-  modalContainer: {
-    position: 'absolute',
-    bottom: 100, // Position from bottom
-    left: 20,
-    right: 20,
-    alignItems: 'center',
-  },
-  alertBox: {
-    backgroundColor: 'white',
-    padding: 20,
-    borderRadius: 10,
+  mapStyle: {
     width: '100%',
-    elevation: 5,
-    borderWidth: 2,
-    borderColor: '#FF6600',
+    height: '100%',
   },
-  alertText: {
-    fontSize: 16,
-    textAlign: 'center',
-    lineHeight: 24,
-    color: '#000',
-    fontWeight: 'bold',
+  phoneBorders: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    zIndex: 10,
+    pointerEvents: 'none', // Add this line to allow touch events to pass through
+  },
+  borderTop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 8,
+    borderTopWidth: 8,
+  },
+  borderRight: {
+    position: 'absolute',
+    top: 80, // Start from below the title container
+    right: 0,
+    bottom: 0,
+    width: 8,
+    borderRightWidth: 8,
+  },
+  borderBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 8,
+    borderBottomWidth: 8,
+  },
+  borderLeft: {
+    position: 'absolute',
+    top: 80, // Start from below the title container
+    left: 0,
+    bottom: 0,
+    width: 8,
+    borderLeftWidth: 8,
   },
 });
+
+// Map Style
+const mapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
+  {
+    featureType: 'administrative.locality',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#d59563' }],
+  },
+  {
+    featureType: 'poi',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#d59563' }],
+  },
+  {
+    featureType: 'poi.park',
+    elementType: 'geometry',
+    stylers: [{ color: '#263c3f' }],
+  },
+  {
+    featureType: 'poi.park',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#6b9a76' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'geometry',
+    stylers: [{ color: '#38414e' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#212a37' }],
+  },
+  {
+    featureType: 'road',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#9ca5b3' }],
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'geometry',
+    stylers: [{ color: '#746855' }],
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'geometry.stroke',
+    stylers: [{ color: '#1f2835' }],
+  },
+  {
+    featureType: 'road.highway',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#f3d19c' }],
+  },
+  {
+    featureType: 'transit',
+    elementType: 'geometry',
+    stylers: [{ color: '#2f3948' }],
+  },
+  {
+    featureType: 'transit.station',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#d59563' }],
+  },
+  {
+    featureType: 'water',
+    elementType: 'geometry',
+    stylers: [{ color: '#17263c' }],
+  },
+  {
+    featureType: 'water',
+    elementType: 'labels.text.fill',
+    stylers: [{ color: '#515c6d' }],
+  },
+  {
+    featureType: 'water',
+    elementType: 'labels.text.stroke',
+    stylers: [{ color: '#17263c' }],
+  },
+];
 
 export default GpsLocationDisplay;
