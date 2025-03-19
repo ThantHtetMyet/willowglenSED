@@ -4,7 +4,6 @@ import MapView, { Marker, Polygon } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
 import restrictedAreas from '../data/restrictedAreas.json'; // Assuming the JSON file is placed in the 'data' folder.
 import { showNotification,initializeNotifications,showBackgroundNotification } from '../utils/notificationService';
-import BackgroundFetch from 'react-native-background-fetch';
 
 const GpsLocationDisplay = () => {
   const [coordinates, setCoordinates] = useState({
@@ -32,27 +31,6 @@ const GpsLocationDisplay = () => {
 
   const backgroundIntervalRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
-    initializeNotifications();
-     // Background fetch setup (recommend extracting into separate file)
-     BackgroundFetch.configure(
-      {
-        minimumFetchInterval: 1, // fetch interval in minutes
-      },
-      async taskId => {
-        ToastAndroid.show('Received background GPS Location Synchronized', ToastAndroid.SHORT);
-        showNotification('🚸 SCHOOL ZONE ALERT!', "HELLO");
-        console.log('Received background-fetch event: ', taskId);
-          showBackgroundNotification();
-        // Call finish upon completion of the background task
-        BackgroundFetch.finish(taskId);
-      },
-      error => {
-         ToastAndroid.show('RNBackgroundFetch failed to start', ToastAndroid.SHORT);
-         showNotification('🚸 ERROR ZONE ALERT!', "HELLO");
-        console.error('RNBackgroundFetch failed to start.');
-      },
-    );
-
     // Handle app state changes (background to foreground)
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
       const previousState = appState.current;
@@ -60,7 +38,50 @@ const GpsLocationDisplay = () => {
 
       // Check if app is going to background
       if (previousState === 'active' && nextAppState === 'background') {
-      
+        
+        // Clear any existing interval
+        if (backgroundIntervalRef.current) {
+          clearInterval(backgroundIntervalRef.current);
+        }
+
+        // Reset notification state when app goes to background
+        setNotificationSent(false);
+        
+        // Start background location check
+        backgroundIntervalRef.current = setInterval(() => {
+          Geolocation.getCurrentPosition(
+            (position) => {
+              const isRestricted = restrictedAreas.features.some((feature) => {
+                if (feature.geometry.type === "Polygon") {
+                  const coordinates = feature.geometry.coordinates[0];
+                  if (isPointInPolygon([position.coords.longitude, position.coords.latitude], coordinates)) {
+                    // Check if notification has already been sent
+                    if (!notificationSent) {
+                      showNotification(
+                        '🚸 SCHOOL ZONE ALERT!',
+                        `${feature.properties.Name}\n\nPlease drive carefully - Speed limit 40km/h`
+                      );
+                      setNotificationSent(true); // Set the flag to prevent further notifications
+                    }
+                    return true;
+                  }
+                }
+                return false;
+              });
+            },
+            (error) => console.log(error),
+            { enableHighAccuracy: true, distanceFilter: 10 }
+          );
+        }, 10000);
+      } else if (nextAppState === 'active') {
+        // Clear interval when app comes to foreground
+        if (backgroundIntervalRef.current) {
+          clearInterval(backgroundIntervalRef.current);
+          backgroundIntervalRef.current = null;
+        }
+
+        // Reset notification flag when app is active again
+        setNotificationSent(false);
       }
     });
 
