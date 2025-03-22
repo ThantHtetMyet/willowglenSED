@@ -4,6 +4,9 @@ import MapView, { Marker, Polygon } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
 import restrictedAreas from '../data/restrictedAreas.json'; // Assuming the JSON file is placed in the 'data' folder.
 import { showNotification,initializeNotifications,showBackgroundNotification } from '../utils/notificationService';
+import BackgroundService from 'react-native-background-actions';
+
+const sleep = (time) => new Promise((resolve) => setTimeout(() => resolve(), time));
 
 const GpsLocationDisplay = () => {
   const [coordinates, setCoordinates] = useState({
@@ -28,68 +31,86 @@ const GpsLocationDisplay = () => {
   const borderColorAnim = useRef(new Animated.Value(0)).current; // Animation value for border color flashing
 
   const titleContainerHeight = 80; // Height of the title container (adjust as needed)
+  const options = {
+      taskName: 'Example',
+      taskTitle: 'ExampleTask title',
+      taskDesc: 'ExampleTask description',
+      taskIcon: {
+          name: 'ic_launcher',
+          type: 'mipmap',
+      },
+      color: '#ff00ff',
+      linkingURI: 'yourSchemeHere://chat/jane', // See Deep Linking for more info
+      parameters: {
+          delay: 3000,
+      },
+  };
 
-  const backgroundIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  useEffect(() => {
-    // Handle app state changes (background to foreground)
-    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      const previousState = appState.current;
-      appState.current = nextAppState;
-
-      // Check if app is going to background
-      if (previousState === 'active' && nextAppState === 'background') {
-        
-        // Clear any existing interval
-        if (backgroundIntervalRef.current) {
-          clearInterval(backgroundIntervalRef.current);
-        }
-
-        // Reset notification state when app goes to background
-        setNotificationSent(false);
-        
-        // Start background location check
-        backgroundIntervalRef.current = setInterval(() => {
+  const SendNotificationStart = async (taskDataArguments) => 
+  {
+    ToastAndroid.show('Background Notification Start!!!', ToastAndroid.SHORT);
+    
+    // Example of an infinite loop task
+    const { delay } = taskDataArguments;
+    await new Promise( async (resolve) => {
+        for (let i = 0; BackgroundService.isRunning(); i++) 
+        {
           Geolocation.getCurrentPosition(
             (position) => {
               const isRestricted = restrictedAreas.features.some((feature) => {
                 if (feature.geometry.type === "Polygon") {
                   const coordinates = feature.geometry.coordinates[0];
                   if (isPointInPolygon([position.coords.longitude, position.coords.latitude], coordinates)) {
-                    // Check if notification has already been sent
-                    if (!notificationSent) {
-                      showNotification(
-                        '🚸 SCHOOL ZONE ALERT!',
-                        `${feature.properties.Name}\n\nPlease drive carefully - Speed limit 40km/h`
-                      );
-                      setNotificationSent(true); // Set the flag to prevent further notifications
-                    }
+                    setIsInsideRestrictedArea(true); // Trigger flashing border
+                    showAlert(`${feature.properties.Name}\n\nPlease drive carefully - Speed limit 40km/h`);
                     return true;
                   }
                 }
                 return false;
               });
-            },
-            (error) => console.log(error),
-            { enableHighAccuracy: true, distanceFilter: 10 }
-          );
-        }, 10000);
-      } else if (nextAppState === 'active') {
-        // Clear interval when app comes to foreground
-        if (backgroundIntervalRef.current) {
-          clearInterval(backgroundIntervalRef.current);
-          backgroundIntervalRef.current = null;
+            });
+            if (!isInsideRestrictedArea) {
+              
+            showNotification('✅ Safe Zone', 
+              'You are not in a school zone area');
+            console.log(i); }
+            else{
+             showBackgroundNotification();
+            }
+            await sleep(delay);
         }
+    });
+  };
 
+  useEffect(() => {
+    // Handle app state changes (background to foreground)
+    const subscription = AppState.addEventListener('change', async (nextAppState: AppStateStatus) => {
+      const previousState = appState.current;
+      appState.current = nextAppState;
+
+      // Check if app is going to background
+      if (previousState === 'active' && nextAppState === 'background')
+      {
+        // Reset notification state when app goes to background
+        setNotificationSent(false);
+        await BackgroundService.start(SendNotificationStart, options);
+        await BackgroundService.updateNotification({taskDesc: 'New ExampleTask description'});
+        console.log('Background task started');
+        ToastAndroid.show('HELLO', ToastAndroid.SHORT);
+      } 
+      else if (nextAppState === 'active') 
+      {
+        ToastAndroid.show('BackgroundService stop', ToastAndroid.SHORT);
+        await BackgroundService.stop();
         // Reset notification flag when app is active again
         setNotificationSent(false);
       }
     });
-
+     // Initialize notifications with permission check
+     initializeNotifications().catch(console.error);
+    
     // Request Location Permission
     const requestPermission = async () => {
-      // Initialize notifications with permission check
-      initializeNotifications().catch(console.error);
-    
       // Request location permission
       const locationGranted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
@@ -197,10 +218,8 @@ const GpsLocationDisplay = () => {
 
     // Set interval for periodic updates
     const intervalId = setInterval(updateCoordinates, 10000);
-    return () => {
-      if (backgroundIntervalRef.current) {
-        clearInterval(backgroundIntervalRef.current);
-      }
+    return () => 
+    {
       subscription.remove();
     };
   }, [titleAnim, moveAnim, scaleAnim, mapReady]);

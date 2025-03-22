@@ -1,5 +1,6 @@
 import PushNotification, { Importance } from 'react-native-push-notification';
 import { PermissionsAndroid, Platform } from 'react-native';
+import { ToastAndroid } from 'react-native';
 
 export const requestNotificationPermission = async () => {
   if (Platform.OS === 'android') {
@@ -26,45 +27,47 @@ export const requestNotificationPermission = async () => {
 export const initializeNotifications = async () => {
   try 
   {
-      const hasPermission = await requestNotificationPermission();
-      if (!hasPermission) {
-        console.log('Notification permission denied');
-        return;
-      }
+  ToastAndroid.show('initializeNotifications Start', ToastAndroid.SHORT);
+  
+    const hasPermission = await requestNotificationPermission();
+    if (!hasPermission) {
+      console.log('Notification permission denied');
+      return;
+    }
 
-      // Create the notification channel first
-      PushNotification.createChannel(
-        {
-          channelId: 'school-zone',
-          channelName: 'School Zone Alerts',
-          channelDescription: 'Notifications for school zone alerts',
-          playSound: true,
-          soundName: 'default',
-          importance: Importance.HIGH,
-          vibrate: true,
-        },
-        (created) => console.log(`createChannel returned '${created}'`)
-      );
+    // Create the notification channel first
+    PushNotification.createChannel(
+      {
+        channelId: 'school-zone',
+        channelName: 'School Zone Alerts',
+        channelDescription: 'Notifications for school zone alerts',
+        playSound: true,
+        soundName: 'default',
+        importance: Importance.HIGH,
+        vibrate: true,
+      },
+      (created) => console.log(`createChannel returned '${created}'`)
+    );
 
-      // Configure push notifications for the app
-      PushNotification.configure({
-        // (Optional) Called when the notification is received
-        onNotification: function(notification) {
-          console.log("NOTIFICATION:", notification);
-        },
-        // (Optional) iOS only, if you need background notifications
-        onAction: function(notification) {
-          console.log("ACTION:", notification.action);
-          console.log("NOTIFICATION:", notification);
-        },
-        // iOS only - Required for permissions
-        onRegistrationError: function(err) {
-          console.error(err);
-        },
-        // iOS only - Register for remote notifications
-        requestPermissions: Platform.OS === 'ios'
-      });
-      
+    // Configure push notifications for the app
+    PushNotification.configure({
+      // (Optional) Called when the notification is received
+      onNotification: function(notification) {
+        console.log("NOTIFICATION:", notification);
+      },
+      // (Optional) iOS only, if you need background notifications
+      onAction: function(notification) {
+        console.log("ACTION:", notification.action);
+        console.log("NOTIFICATION:", notification);
+      },
+      // iOS only - Required for permissions
+      onRegistrationError: function(err) {
+        console.error(err);
+      },
+      // iOS only - Register for remote notifications
+      requestPermissions: Platform.OS === 'ios'
+    });
+    
     } 
     catch (error) 
     {
