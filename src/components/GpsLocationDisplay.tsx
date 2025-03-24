@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { SafeAreaView, StyleSheet,Alert, Text, Animated, Dimensions, View, AppState, AppStateStatus, ToastAndroid, PermissionsAndroid } from 'react-native';
 import MapView, { Marker, Polygon } from 'react-native-maps';
 import Geolocation from '@react-native-community/geolocation';
-import restrictedAreas from '../data/restrictedAreas.json'; // Assuming the JSON file is placed in the 'data' folder.
+import schoolzoneAreas from '../data/schoolzoneAreas.json'; // Assuming the JSON file is placed in the 'data' folder.
 import { showNotification,initializeNotifications,showBackgroundNotification } from '../utils/notificationService';
 import BackgroundService from 'react-native-background-actions';
 import Icon from 'react-native-vector-icons/FontAwesome'; // Import the car icon library
@@ -11,6 +11,7 @@ import { Image } from 'react-native';
 // Update imports at the top
 import { gyroscope } from 'react-native-sensors';
 import { magnetometer, SensorTypes, setUpdateIntervalForType } from 'react-native-sensors';
+import silverZoneAreas from '../data/silverzoneAreas.json';
 
 const sleep = (time) => new Promise((resolve) => setTimeout(() => resolve(), time));
 
@@ -18,11 +19,28 @@ const GpsLocationDisplay = () => {
   const [orientation, setOrientation] = useState(0); // Store device orientation (in degrees)
   const [deviceHeading, setDeviceHeading] = useState(0);
   const [compassHeading, setCompassHeading] = useState(0); // Add this line
+  const [speed, setSpeed] = useState(0); // Add near other state declarations
 
   // Increase buffer size and add low-pass filter
   const MAX_HISTORY_LENGTH = 20; // Increased from 10
   let headingHistory = [];
-  
+    
+  const [lastPosition, setLastPosition] = useState(null);
+  const [lastTimestamp, setLastTimestamp] = useState(null);
+
+  // Add this helper function to calculate distance between two points
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
   const smoothHeading = (newHeading: number): number => {
     // Normalize heading to 0-360 range
     newHeading = newHeading < 0 ? newHeading + 360 : newHeading;
@@ -133,7 +151,7 @@ const GpsLocationDisplay = () => {
   
           Geolocation.getCurrentPosition(
             (position) => {
-              currentIsRestricted = restrictedAreas.features.some((feature) => {
+              currentIsRestricted = schoolzoneAreas.features.some((feature) => {
                 if (feature.geometry.type === "Polygon") {
                   const coordinates = feature.geometry.coordinates[0];
                   return isPointInPolygon([position.coords.longitude, position.coords.latitude], coordinates);
@@ -152,8 +170,13 @@ const GpsLocationDisplay = () => {
           );
           // Send appropriate notification based on location
           if (temp_currentIsRestricted) {
+            ToastAndroid.show('You are in polygon!!!', ToastAndroid.SHORT);
             showBackgroundNotification();
           } 
+          else
+          {
+            ToastAndroid.show('You are not in polygon!!!', ToastAndroid.SHORT);
+          }
           await sleep(delay);
         }
       });
@@ -279,6 +302,26 @@ const GpsLocationDisplay = () => {
             setOrientation(position.coords.heading); // Save heading info
           }
           
+          // Calculate speed based on distance and time
+        if (lastPosition && lastTimestamp) {
+          const distance = calculateDistance(
+            lastPosition.coords.latitude,
+            lastPosition.coords.longitude,
+            position.coords.latitude,
+            position.coords.longitude
+          );
+          const timeInHours = (position.timestamp - lastTimestamp) / (1000 * 60 * 60);
+          const calculatedSpeed = distance / timeInHours; // km/h
+          
+          // Apply threshold to filter out noise
+          const speedThreshold = 3; // km/h
+          setSpeed(Math.round(calculatedSpeed < speedThreshold ? 0 : calculatedSpeed));
+        }
+
+        // Update last position and timestamp
+        setLastPosition(position);
+        setLastTimestamp(position.timestamp);
+        
           setRegion({
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
@@ -288,7 +331,7 @@ const GpsLocationDisplay = () => {
          
           // Check if in restricted area only after map is ready
           if (mapReady) {
-            const isRestricted = restrictedAreas.features.some((feature) => {
+            const isRestricted = schoolzoneAreas.features.some((feature) => {
               if (feature.geometry.type === "Polygon") {
                 const coordinates = feature.geometry.coordinates[0];
                 if (isPointInPolygon([position.coords.longitude, position.coords.latitude], coordinates)) {
@@ -364,12 +407,12 @@ const GpsLocationDisplay = () => {
       Animated.sequence([
         Animated.timing(borderColorAnim, {
           toValue: 1,
-          duration: 500,
+          duration: 300,
           useNativeDriver: false,
         }),
         Animated.timing(borderColorAnim, {
           toValue: 0,
-          duration: 500,
+          duration: 300,
           useNativeDriver: false,
         }),
       ])
@@ -413,49 +456,86 @@ const GpsLocationDisplay = () => {
             <Text style={styles.title}>Willowglen SED</Text>
           </Animated.View>
         </View>
-
         {mapReady && (
-          <View style={styles.mapContainer}>
-            <MapView
-              style={styles.mapStyle}
-              region={region}
-              showsUserLocation={false}  // Change this to false to hide the blue dot
-              showsMyLocationButton={true}
-              customMapStyle={mapStyle}
-            >
-             <Marker 
-                coordinate={coordinates}
-                anchor={{ x: 0.5, y: 0.5 }}
+            <View style={styles.mapContainer}>
+              <MapView
+                style={styles.mapStyle}
+                region={region}
+                showsUserLocation={false}
+                showsMyLocationButton={true}
+                customMapStyle={mapStyle}
               >
-                <Image 
-                  source={require('../assets/car.png')} 
-                  style={[
-                    styles.carImage,
-                    { transform: [{ rotate: `${orientation}deg` }] }  // Remove the -270 offset
-                  ]}
-                />
-              </Marker>
+                <Marker 
+                  coordinate={coordinates}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <Image 
+                    source={require('../assets/car.png')} 
+                    style={[
+                      styles.carImage,
+                      { transform: [{ rotate: `${orientation}deg` }] }
+                    ]}
+                  />
+                </Marker>
 
-              {restrictedAreas.features.map((feature, index) => {
-                if (feature.geometry.type === 'Polygon') {
-                  return (
-                    <Polygon
-                      key={index}
-                      coordinates={feature.geometry.coordinates[0].map(coord => ({
-                        latitude: coord[1],
-                        longitude: coord[0],
-                      }))}
-                      strokeColor="#FFFF00"
-                      fillColor="rgba(255, 0, 0, 0.3)"
-                      strokeWidth={2}
-                    />
-                  );
-                }
-                return null;
-              })}
-            </MapView>
-          </View>
-        )}
+                {/* School Zones */}
+                {schoolzoneAreas.features.map((feature, index) => {
+                  if (feature.geometry.type === 'Polygon') {
+                    return (
+                      <Polygon
+                        key={`school-${index}`}
+                        coordinates={feature.geometry.coordinates[0].map(coord => ({
+                          latitude: coord[1],
+                          longitude: coord[0],
+                        }))}
+                        strokeColor="#FFFF00"
+                        fillColor="rgb(197, 194, 0)"
+                        strokeWidth={2}
+                      />
+                    );
+                  }
+                  return null;
+                })}
+
+                {/* Silver Zones */}
+                {silverZoneAreas.features.map((feature, index) => {
+                  if (feature.geometry.type === 'Polygon') {
+                    console.log('Rendering silver zone:', index); // Debug log
+                    return (
+                      <Polygon
+                        key={`silver-${index}`}
+                        coordinates={feature.geometry.coordinates[0].map(coord => ({
+                          latitude: coord[1],
+                          longitude: coord[0],
+                        }))}
+                        strokeColor="#FFA500" // Orange border
+                        fillColor="rgba(255, 165, 0, 0.4)" // Semi-transparent orange
+                        strokeWidth={3}
+                      />
+                    );
+                  }
+                  return null;
+                })}
+              </MapView>
+
+              {/* Speed Indicator */}
+              <View style={styles.speedContainer}>
+                <Text style={styles.speedValue}>{speed}</Text>
+                <Text style={styles.speedUnit}>km/h</Text>
+              </View>
+              {/* Map Legend */}
+              <View style={styles.legendContainer}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendColor, { backgroundColor: 'rgb(255, 251, 0)' }]} />
+                  <Text style={styles.legendText}>School Zone</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendColor, { backgroundColor: '#FFA500' }]} />
+                  <Text style={styles.legendText}>Silver Zone</Text>
+                </View>
+              </View>
+            </View>
+          )}
       </View>
 
       {/* Flashing Border */}
@@ -499,7 +579,6 @@ const GpsLocationDisplay = () => {
   );
 };
 
-// In the styles StyleSheet, add these new styles
 const styles = StyleSheet.create({
    markerContainer: {
     backgroundColor: 'transparent',
@@ -580,6 +659,52 @@ const styles = StyleSheet.create({
     bottom: 0,
     width: 8,
     borderLeftWidth: 8,
+  },
+  legendContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: 10,
+    borderRadius: 5,
+    elevation: 5,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 5,
+  },
+  legendColor: {
+    width: 20,
+    height: 20,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#000',
+  },
+  legendText: {
+    color: '#000',
+    fontSize: 14,
+  },
+  speedContainer: {
+    position: 'absolute',
+    top: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 10,
+    borderRadius: 25,
+    width: 80,
+    height: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  speedValue: {
+    color: '#ffffff',
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  speedUnit: {
+    color: '#ffffff',
+    fontSize: 14,
   },
 });
 
@@ -667,3 +792,4 @@ const mapStyle = [
 ];
 
 export default GpsLocationDisplay;
+
